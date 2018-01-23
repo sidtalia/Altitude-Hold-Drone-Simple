@@ -1,13 +1,11 @@
  /*
- * recent changes - 
- * gyro scale changed from 500deg/s to 1000deg/s
- * 1.PID changed to EID, this system exponentially increases Kp with the error and Kd with rotation rate. 
- * 2.gyro scale changed from 250deg/s to 500 deg/s 
- * 3.limiter function added to limit the pwm output between 1100 and 2000 us
- * 4.on the fly PD tuning added (needs 5th channel from receiver to be connected to pin 12 on the arduino 
- * 5.max value of pitch and roll input increased to about 40 degrees(if you have pitch/roll input pwm ranging from 1000-2000us)
- * 6.max value of yaw input increased from 50deg/s to 500 deg/s
- * 7.IMAX changed from 1000 to 100 and Ki changed from 0.025 to 0.25
+ * This is basically the Drone simple without the "on the fly" PID tuning.
+ * The PWM on the 5th channel(pin 12) now represents whether the drone is in altitude hold mode
+ * or stabilize mode. The maxbotix sonar(or hc-sr04 if you're on a budget) is connected to pin A0.
+ * A jumper must be connected from the first cell in your lipo to the pin A1. This is used to prevent
+ * the drone from crashing due to low battery because in altitude hold mode it will keep increasing the throttle 
+ * to maintain altitude and the pilot will not be able to tell that the battery has been drained already until the 
+ * drone falls like a rock.
  */
 
 #include "I2Cdev.h"
@@ -135,7 +133,10 @@ int HOVERTHROTTLE=1500;
 #define throttleKi 0.1875
 #define throttleKd 5
 #define dt 0.0025  //cycle time in seconds
-#define my_sqrt(a) (0.25 + a*(1-(0.25*a))) // 30us, DO NOT USE IT FOR numbers too far away from 1, its an approximation for g's sake.
+float my_sqrt(float a)
+{ 
+ return (0.25 + a*(1-(0.25*a)));
+}// 30us, DO NOT USE IT FOR numbers too far away from 1, its an approximation for g's sake.
 
 long failsafe=0;  //initializing failsafe variable 
 volatile bool servoWrite=0; //initializing servoWrite variable as false(no signal received)
@@ -192,7 +193,7 @@ void readMPU()   //function for reading MPU values. its about 80us faster than g
   g[0]=Wire.read()<<8|Wire.read();  
   g[1]=Wire.read()<<8|Wire.read();
   g[2]=Wire.read()<<8|Wire.read();
-}// 4 + 28(0.125)=11us . change this->in total it takes 291us. 11 us since esc_timer. 
+}// 4 + 28(0.125)=11us . 11 us since esc_timer. 
 
 int deadBand(int input)//the receiever signals vary a little bit (set value +/- 8us). This function removes that jitter 
 {
