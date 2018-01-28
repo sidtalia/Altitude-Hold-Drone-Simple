@@ -19,19 +19,24 @@
 ║█████║║███║║█║───║████║
 ╚═════╝╚═══╝╚═╝───╚════╝ 
  */
+//(writing "inline" before each function in essence suggests the compiler to just copy paste it where ever it is called 
+//in order to reduce the function overhead. This is crucial in a time constrained environment.
 
-#define my_asin(a) a*(1+(0.5*a*a))
+float my_asin(float a)
+{
+  return a*(1+(0.5*a*a));
+}
 
 inline void callimu()
 {
   //-------EXTRACTION AND PROCESSING OF ACCEL-GYRO DATA BEGINS--
   readMPU();  //this function is marginally faster for the purpose of reading. i use the library functions in the setup because convenience. 
-                //this is the only function which is being called repeatedly so this is the only function worth redefining .
-  if(a[0]==0&&a[1]==0&&a[2]==0&&g[0]==0&&g[1]==0&&g[2]==0)
-  {
-    G[0] += 0.01055*p*dt;
-    G[1] += 0.01055*r*dt;
-    G[2] = 0;
+                //this is the only function which is being called repeatedly so this is the only function worth redefining.
+  if(a[0]==0&&a[1]==0&&a[2]==0&&g[0]==0&&g[1]==0&&g[2]==0)//the probability that all the sensor fields read 0 while the sensor is 
+  {                                             // still connected and working is too small. Still, it is checked in each cycle
+    G[0] += 0.01055*p*dt;                       //whether the this event is still true or not. Until the sensor is re-connected,  
+    G[1] += 0.01055*r*dt;                       //the state is evaluated by estimating the effect of the last cycle's output 
+    G[2] = 0;                                   // on the quad-copter's orientation.
     T[0] += G[0]*dt;
     T[1] += G[1]*dt;
     accelgyro.initialize();//keep trying to re-initialize the mpu
