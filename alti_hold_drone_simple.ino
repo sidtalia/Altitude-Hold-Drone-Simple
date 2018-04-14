@@ -13,16 +13,17 @@
 #include "Wire.h"
 
 #define BaseKp 5.0
-#define BaseKd 1.5
-int tune; // tune requires channel 5 to be used for scaling PD up and down
+#define BaseKd 1.6
+int tune; // tune is for toggling alti-hold mode.
 float Kp_pitch,Kp_roll;
-#define Ki 0.03  //premultiply the time with Ki 
-#define IMAX 2000  //this is not in degrees, this is degrees*400 
+#define Ki 0.0375  //premultiply the time with Ki 
+#define IMAX 3000  //this is not in degrees, this is degrees*400 
 #define YawKp 10   //Kp for yaw rate 
 #define minValue 1100  //min throttle value, this is to prevent any motor from stopping mid air.
 #define maxValue 2000 //max pwm for any motor 
 #define YAW_MAX 300   //max value of yaw input
-#define CONSTANT 0.0003 
+#define CONSTANT 0.0009 
+#define DCONSTANT 0.0000001
 
 
 unsigned long FL,FR,BL,BR; //(Front left, front right, back left, back right motor)
@@ -80,21 +81,20 @@ void setup()
   //==============done==============================
   Serial.begin(250000);
   //===========ACCELGYRO SETUP BEGINS===============   
-    Wire.begin();
+    Wire.begin();   
     TWBR = 12; //prescaler for 400KHz i2c clock rate, you may or may not use it, it wont really make a huge difference as the cycle time is fixed anyway
-    
     accelgyro.initialize();  //do the whole initial setup thingy using this function.
     accelgyro.testConnection()==1 ? connection=1 : connection=0 ; 
     // offsets
    //2068.91||-1138.95||16216.07||-37.22||-13.16||-74.54||
    //3158.88||-428.89||16113.09||-27.64||-12.16||-72.98||
-   
-    offsetA[0]= 2068;        //these offsets were calculated beforehand
-    offsetA[1]= -1138; 
-    offsetA[2]= -143;
-    offsetG[0]= -38;
-    offsetG[1]= -13;
-    offsetG[2]= -75;
+   //1598.24||-659.35||16344.98||-4.15||-17.29||-72.81||
+    offsetA[0]= 1600;        //these offsets were calculated beforehand
+    offsetA[1]= -660; 
+    offsetA[2]= -287;
+    offsetG[0]= -4.3;
+    offsetG[1]= -17.3;
+    offsetG[2]= -72.8;
     
     for(j=0;j<2000;j++)   //taking 2000 samples for finding initial orientation,takes about 0.8 seconds  
     {
@@ -121,22 +121,19 @@ void setup()
 
 
 int throttle=1000,dummy; //initializing throttle with default value
-float rollsetp=0.0,yawsetp=0.0,pitchsetp=0.0,pError,rError; //initializing setpoints at 0
+float rollsetp=0.0,yawsetp=0.0,pitchsetp=0.0,pError,rError,lastPError=0,lastRError =0,dPError=0,dRError=0; //initializing setpoints at 0
 int p,r,y;    // initializing PID outputs for pitch, yaw, roll
 long lastTime;  //timing variable for failsafe 
-float tanSqTheta,cosSqTheta,cosTheta,Av=0,Vv=0,terror;
+float tanSqTheta,cosSqTheta,cosTheta,Av=0,lastAv=0,Vv=0,terror;
 float sterror=0;
 float dist,lastDist=0.2,lastV,delV=0;
 volatile bool ultra=false;
-int HOVERTHROTTLE=1500;
-#define throttleKp 75
-#define throttleKi 0.1875
-#define throttleKd 5
+#define HOVERTHROTTLE 1500
+#define throttleKp 120
+#define throttleKi 0.1
+#define throttleKd 10
 #define dt 0.0025  //cycle time in seconds
-float my_sqrt(float a)
-{ 
- return (0.25 + a*(1-(0.25*a)));
-}// 30us, DO NOT USE IT FOR numbers too far away from 1, its an approximation for g's sake.
+//#define my_sqrt(a) (0.25 + a*(1-(0.25*a))) // 30us, DO NOT USE IT FOR numbers too far away from 1, its an approximation for g's sake.
 
 long failsafe=0;  //initializing failsafe variable 
 volatile bool servoWrite=0; //initializing servoWrite variable as false(no signal received)
@@ -152,30 +149,37 @@ void readMPU()   //function for reading MPU values. its about 80us faster than g
   Wire.requestFrom(0x68,14); //request 14 bytes from mpu
   //280us for all data to be received. 
   //requrestFrom is a blocking function 
-
-  //squeeze the vertical velocity calculations here.
+//
+//  //squeeze the vertical velocity calculations here
   tanSqTheta = 0.0003045*(T[0]*T[0] + T[1]*T[1]); //35us
   cosSqTheta = 1 - tanSqTheta + (tanSqTheta*tanSqTheta); //20us
-  cosTheta = my_sqrt(cosSqTheta);//30us
-  Av = A[2]*cosTheta - 9.8*cosSqTheta; // 20us
-  if(Av<1&&Av>-1) 
+  cosTheta = sqrt(cosSqTheta);//30us
+  
+  if(A[2]<1)
   {
-    Av = 0;
+    A[2] = 1;  
   }
+  if(A[2]>19)
+  {
+    A[2] = 19;
+  }
+  Av = A[2]*cosTheta - 9.8*cosSqTheta; // 20us
+  
+  Av = 0.8*lastAv + 0.2*Av;
   if(ultra)
   {
     ultra = false;
     dist = input[5]*0.0002105*cosTheta;//caliberation number to convert to meters.
-    Vv = (dist - lastDist)*10;//10Hz;
+    Vv = (dist - lastDist)*10;//10Hz. complimentary filter.
     delV = Vv - lastV;
-    if((delV*delV*10)>(Av*Av))//30us
+    if((delV*delV)>(Av*Av*100))//30us
     {
       Vv = lastV;
     }
     lastDist = dist; 
     lastV = Vv;
   }//188us,31 to spare!
-
+  
   esc_timer=micros();   //get time stamp
   PORTD |= PULL_HIGH;   //pull the pins high 
                         //notice that the pins are pulled high after getting the time stamp.this is done in that order because
@@ -193,7 +197,7 @@ void readMPU()   //function for reading MPU values. its about 80us faster than g
   g[0]=Wire.read()<<8|Wire.read();  
   g[1]=Wire.read()<<8|Wire.read();
   g[2]=Wire.read()<<8|Wire.read();
-}// 4 + 28(0.125)=11us . 11 us since esc_timer. 
+}// 4 + 28(0.125)=11us . change this->in total it takes 291us. 11 us since esc_timer. 
 
 int deadBand(int input)//the receiever signals vary a little bit (set value +/- 8us). This function removes that jitter 
 {
@@ -318,11 +322,11 @@ void loop()
    lastTime = micros();
    callimu();   //494us since esc_timer,this function calculates orientation (pitch and roll) 
   
-   if(yawsetp<(-150)&&throttle<=minValue)   //arming sequence
+   if(yawsetp<(-150)&&dummy<=minValue)   //arming sequence
    {
       arm=1;
    }
-   else if(yawsetp>150&&throttle<=minValue)  //disarming sequence 
+   else if(yawsetp>150&&dummy<=minValue)  //disarming sequence 
    {
       arm=0;
    }
@@ -330,7 +334,13 @@ void loop()
    
    //PID begins---
    pError = pitchsetp-T[0]; //storing the error value somewhere as it will be
+   dPError = (pError - lastPError)*400;
+   lastPError = pError;
+   
    rError = rollsetp-T[1]; //used repeatedly
+   dRError = (rError - lastRError)*400;
+   lastRError = rError; 
+   
    sigma[0]+= (pError); //incrementing integral of error 
    sigma[1]+= (rError);
    //20us, 518us since esc_timer
@@ -349,9 +359,9 @@ void loop()
    Kp_pitch = ExpKp(BaseKp,pError);
    Kp_roll = ExpKp(BaseKp,rError);
     
-   r = Kp_roll*(rError) - BaseKd*G[1] + Ki*sigma[1];   //reducing time by not creating a function at all for these tiny tasks
+   r = Kp_roll*(rError) + BaseKd*dRError + Ki*sigma[1];   //reducing time by not creating a function at all for these tiny tasks
    
-   p = Kp_pitch*(pError) - BaseKd*G[0] + Ki*sigma[0];
+   p = Kp_pitch*(pError) + BaseKd*dPError + Ki*sigma[0];
    
    y = YawKp*(yawsetp-G[2]);
    if(y>0&&y>YAW_MAX) //capping max yaw value
@@ -378,43 +388,49 @@ void loop()
    }
    
    // 50us, 742us since esc_timer
-   ((millis()-failsafe<1000)&&arm)? state=1 : state=0 ; //if receiver is still connected or reconnects within a second and the drone is "armed", state = 1  
+   //((millis()-failsafe<1000)&&arm)? state=1 : state=0 ; //if receiver is still connected or reconnects within a second and the drone is "armed", state = 1  
    //5us, 748us since esc_timer
 
    if(lowbatt||((millis()-failsafe>1000)&&arm))//(if connection has been lost but we are mid air)
    {
       tune=2000;//forcefully go into alti-hold mode,
-      state = 1;//forcefully make the state =1
-      dummy = 1400;//drop with 20% full speed, should be about 40cm/s
+     // state = 1;//forcefully make the state =1
+      dummy = 1450;//drop with 10% full speed, should be about 50cm/s
       if(!lowbatt)
       {
         rollsetp = 0;
         pitchsetp = 0;
         yawsetp = 0; // ensure that it stays relatively flat 
       }
-      if(dist<0.3)
-      {
-        state=0;  
-      }
+//      if(dist<0.3)
+//      {
+//        state=0;  
+//      }
    }
 
    if(tune>1500)
    {
       terror = 0.01*(deadBand(dummy)-1500) - Vv;
       sterror += terror;
-      throttle = hovercap(throttleKp*terror) + hovercap(throttleKi*sterror) -hovercap(throttleKd*Av) +  1400;//open loop + closed loop = advanced PID.
+      throttle = hovercap(throttleKp*terror) + hovercap(throttleKi*sterror) - hovercap(throttleKd*Av) + HOVERTHROTTLE;//open loop + closed loop = advanced PID.
+
       if(input[1]<minValue)
       {
         throttle = minValue;
       }
    }//70us.820us since esc_timer
-   
+
+   arm? state = 1 : state = 0;
    //
    if(state)   
    {
-      if(analogRead(A1)<600)//cell voltage below 3.5V under load
+      if(analogRead(A1)<700)//cell voltage below 3.5V under load
       {
         lowbatt = true;
+      }
+      else
+      {
+        lowbatt = false;
       }
       correction(); //call the correction function to calculate the pwms and send the pwms to the escs    
    }
@@ -428,11 +444,13 @@ void loop()
       T[1]=(-57.3*asin(A[0]*0.102));
       
       Vv = 0;
+      Av=0;
+      lastAv = 0;
       sterror = 0;
    }  
    
  }
- //Serial.println(Vv);
+ //Serial.println(Av);
  //Serial.print(byte(r));
  while(micros()-lastTime<2500);  //wait for the 2500 us to be over
 }
