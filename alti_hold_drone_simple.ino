@@ -51,7 +51,7 @@ bool connection;
 
 //------variables for interrupt-------
 volatile unsigned long timer[8];   
-volatile byte last_channel[6]={0,0,0,0,0};
+volatile byte last_channel[6]={0,0,0,0,0,0};
 volatile int input[6]={1000,1500,1500,1500,1000,0}; //input variables to record the input PWM signals from receiver 
 //---------------------------
 
@@ -82,7 +82,7 @@ void setup()
   Serial.begin(250000);
   //===========ACCELGYRO SETUP BEGINS===============   
     Wire.begin();   
-    TWBR = 12; //prescaler for 400KHz i2c clock rate, you may or may not use it, it wont really make a huge difference as the cycle time is fixed anyway
+    TWBR = 12; //prescaler for 400KHz i2c clock rate.
     accelgyro.initialize();  //do the whole initial setup thingy using this function.
     accelgyro.testConnection()==1 ? connection=1 : connection=0 ; 
     // offsets
@@ -139,7 +139,7 @@ long failsafe=0;  //initializing failsafe variable
 volatile bool servoWrite=0; //initializing servoWrite variable as false(no signal received)
 bool arm=0;  //initializing arming variable as false(initially not armed)
 bool state=0; //initializing state as false so that the motor is not sent any signals
-bool lowbatt = false;
+bool lowbatt = false; //initializing low battery voltage flag as false
 
 void readMPU()   //function for reading MPU values. its about 80us faster than getMotion6() and hey every us counts!
 {
@@ -170,9 +170,9 @@ void readMPU()   //function for reading MPU values. its about 80us faster than g
   {
     ultra = false;
     dist = input[5]*0.0002105*cosTheta;//caliberation number to convert to meters.
-    Vv = (dist - lastDist)*10;//10Hz. complimentary filter.
+    Vv = (dist - lastDist)*10;//10 for 10Hz. 
     delV = Vv - lastV;
-    if((delV*delV)>(Av*Av*100))//30us
+    if((delV*delV)>(Av*Av*100))//30us remove noise in speed 
     {
       Vv = lastV;
     }
@@ -208,7 +208,7 @@ int deadBand(int input)//the receiever signals vary a little bit (set value +/- 
   return input;
 }
 
-float ExpKp(float k,float error)
+float ExpKp(float k,float error) //research material. COPY AT YOUR OWN RISK!!
 {
  return k*(1 + CONSTANT*error*error);
 }//35us function
@@ -239,7 +239,7 @@ void motorWrite() //has a maximum error of 3.5 us(time taken by micros() to retu
    }
 }
 
-inline int limiter(int input)
+inline int limiter(int input)//limits the pulse value between 1100 and 2000us
 {
   if(input>maxValue)
   {
@@ -292,7 +292,7 @@ void correction()
    motorWrite();  
 } 
 
-float hovercap(float input)
+float hovercap(float input)//for limiting the throttle value for alti-hold PI control
 {
   if(input>150)
   {
