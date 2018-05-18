@@ -124,7 +124,7 @@ void setup()
 
 int throttle=1000,dummy;//initializing throttle with default value
 float rollsetp=0.0,yawsetp=0.0,pitchsetp=0.0;
-float pError,rError,lastPitchSetp=0,lastRollSetp =0,dPError=0,dRError=0,lastPError=0,lastRError=0; //initializing setpoints at 0
+float pError,rError,lastPitchSetp=0,lastRollSetp =0,dRin=0,dPin=0,dPError=0,dRError=0,lastPError=0,lastRError=0; //initializing setpoints at 0
 int p,r,y;    // initializing PID outputs for pitch, yaw, roll
 long lastTime;  //timing variable for failsafe 
 float tanSqTheta,cosSqTheta,cosTheta,Av=0,lastAv=0,Vv=0,terror;
@@ -342,8 +342,15 @@ void loop()
       //transferring inputs from volatile to non-volatile variables 
       throttle = dummy =input[1];
       yawsetp  = (1500-deadBand(input[3]))*0.6;   //this is yaw rate(deg/sec)
-      pitchsetp = (1500-deadBand(input[2]))*0.1;   //roll, pitch setp in degrees
+      
+      pitchsetp = (1500-deadBand(input[2]))*0.1;//roll, pitch setp in degrees
+      dPin = (pitchsetp - lastPitchSetp)*400;//calc. the derivative of the input right here right now.
+      lastPitchSetp = pitchsetp;
+      
       rollsetp = (deadBand(input[0])-1500)*0.1;   
+      dRin = (rollsetp - lastRollSetp)*400; //calculating the derivative of the input right here right now.
+      lastRollSetp = rollsetp;
+      
       tune = input[4];
      
       servoWrite=0;     //making servo write false 
@@ -377,15 +384,12 @@ void loop()
       }
      }
      pError = pitchsetp-T[0]; //storing the error value somewhere as it will be used over and over
-     dPError = (pitchsetp - lastPitchSetp)*400 - G[0];//derivative of the input minus derivative of state
-     lastPitchSetp = pitchsetp;
-  
-     rError = rollsetp-T[1]; 
-     dRError = (rollsetp - lastRollSetp)*400 - G[1];
-     lastRollSetp = rollsetp; 
+     dPError = dPin - G[0];//derivative of the input minus derivative of state
+     sigma[0]+= (pError);//incrementing integral of error 
      
-     sigma[0]+= (pError); //incrementing integral of error 
-     sigma[1]+= (rError);
+     rError = rollsetp-T[1]; 
+     dRError = dRin - G[1];
+     sigma[1]+= (rError);//incrementing integral of error 
    }//142us . 690us since esc_timer
    
    if(tune<1200)  //rate mode.
