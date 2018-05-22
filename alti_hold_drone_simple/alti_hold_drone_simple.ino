@@ -1,13 +1,9 @@
  /*
  * recent changes - 
  * gyro scale changed from 500deg/s to 1000deg/s
- * 1.PID changed to EID, this system exponentially increases Kp with the error and Kd with rotation rate. 
- * 2.gyro scale changed from 250deg/s to 500 deg/s 
- * 3.limiter function added to limit the pwm output between 1100 and 2000 us
- * 4.on the fly PD tuning added (needs 5th channel from receiver to be connected to pin 12 on the arduino 
- * 5.max value of pitch and roll input increased to about 40 degrees(if you have pitch/roll input pwm ranging from 1000-2000us)
- * 6.max value of yaw input increased from 50deg/s to 500 deg/s
- * 7.IMAX changed from 1000 to 100 and Ki changed from 0.025 to 0.25
+ * 1.PID changed to EID, this system exponentially increases Kp with the error. This allows you to have a very low default kp value,
+     leading to extreme steady state stability (it is essentially running an ID algorithm as long as your errors aren't larger than 3-4
+     degrees) while also allowing extreme maneuverability(smaller rise time). 
  */
 
 #include "I2Cdev.h"
@@ -24,9 +20,17 @@ float Kp_pitch,Kp_roll;
 #define minValue 1100  //min throttle value, this is to prevent any motor from stopping mid air.
 #define maxValue 2000 //max pwm for any motor 
 #define YAW_MAX 300   //max value of yaw input
-#define CONSTANT 0.0009 
-#define DCONSTANT 0.0000005
-
+#define CONSTANT 0.00045 //reduce this number if you want to reduce the high end punch(large error punch, low frequency punches)  
+#define DCONSTANT 0.0000001//reduce this number if you want to reduce the "responsiveness" (small error, high frequency punches)
+/*
+NOTE : increasing the value of CONSTANT and DCONSTANT will increase responsiveness and "bite" but will also significantly reduce the 
+flight time. These may not actually have any positive effect on your build if you use esc-motor combinations that can't change speeds 
+at a fast rate (the fc produces a new control signal every 2.5ms, thats like 400 times a second. The esc's need to be able to respond 
+to these changes quickly (which is why the preferred firmware for the esc's is simonK ). Large values of CONSTANT and DCONSTANT will 
+cause the motors to go full throttle on one side and no throttle on the other side during pitching or roll. Due to this, if you change 
+the pitch/roll from side to side very quickly, the quadcopter will appear to be climbing a "ladder". This is happening because the
+reduction in the thrust on one side is less than the increase in thrust on the other side (thrust is proportional to the RPM squared). 
+*/
 
 unsigned long FL,FR,BL,BR; //(Front left, front right, back left, back right motor)
 long esc_timer,end_timer;   //timers to keep track of width of the pulses
@@ -88,9 +92,7 @@ void setup()
     accelgyro.initialize();  //do the whole initial setup thingy using this function.
     accelgyro.testConnection()==1 ? connection=1 : connection=0 ; 
     // offsets
-   //2068.91||-1138.95||16216.07||-37.22||-13.16||-74.54||
-   //480.93||-361.15||16499.99||-5.29||-18.13||-73.77||
-   //1598.24||-659.35||16344.98||-4.15||-17.29||-72.81||
+
     offsetA[0]= 618;        //these offsets were calculated beforehand
     offsetA[1]= -369; 
     offsetA[2]= -27.27;
@@ -135,7 +137,7 @@ volatile bool ultra=false;
 #define HOVERTHROTTLE 1500
 #define throttleKp 120
 #define throttleKi 0.1
-#define throttleKd 10
+#define throttleKd 0.1
 #define dt 0.0025  //cycle time in seconds
 //#define my_sqrt(a) (0.25 + a*(1-(0.25*a))) // 30us, DO NOT USE IT FOR numbers too far away from 1, its an approximation for g's sake.
 
@@ -169,14 +171,19 @@ void readMPU()   //function for reading MPU values. its about 80us faster than g
   }
   Av = A[2]*cosTheta - 9.8*cosSqTheta; // 20us
   
-  Av = 0.8*lastAv + 0.2*Av;
+  Av = 0.95*lastAv + 0.05*Av;//Low pass filter. The readings have a lot of high frequency jitter.
+  lastAv = Av;
   if(ultra)
   {
     ultra = false;
     dist = input[5]*0.0002105*cosTheta;//caliberation number to convert to meters.
-    Vv = (dist - lastDist)*10;//10Hz. complimentary filter.
+    Vv = (dist - lastDist)*10;//10Hz. 
     delV = Vv - lastV;
-    if((delV*delV)>(Av*Av*100))//30us
+   /*
+    if the change in speed within one ultrasonic height update(10Hz->0.1s / update) is more than the vertical acceleration 
+    of the quadcopter, it's probably because some object suddenly came underneath the quad, ignore it). 
+   */
+    if((delV*delV*100)>(Av*Av))//30us
     {
       Vv = lastV;
     }
@@ -216,6 +223,11 @@ float ExpKp(float k,float error)
 {
  return k*(1 + CONSTANT*error*error);
 }//35us function
+
+float ExpKd(float rate)
+{
+  return rate*(1+DCONSTANT*rate*rate);
+}//25us function
 
 void motorWrite() //has a maximum error of 3.5 us(time taken by micros() to return ) 
 {        
@@ -380,17 +392,18 @@ void loop()
       {
         throttle = minValue;
       }
-     }
+     } 
      pError = pitchsetp-T[0]; //storing the error value somewhere as it will be used over and over
-     dPError = (pitchsetp - lastPitchSetp)*400 - G[0];//derivative of the input minus derivative of state
+     //a new input only comes in every 20 ms(by default). therefore the rate of change of input = change in input/0.02 = change in input*50
+     dPError = ExpKd((pitchsetp - lastPitchSetp)*50) - G[0];//derivative of the input minus derivative of state
      sigma[0]+= (pError);//incrementing integral of error 
      
      rError = rollsetp-T[1]; 
-     dRError = (rollsetp - lastRollSetp)*400 - G[1];
+     dRError = ExpKd((rollsetp - lastRollSetp)*50) - G[1];
      sigma[1]+= (rError);//incrementing integral of error 
    }//142us . 690us since esc_timer
    
-   if(tune<1200)  //rate mode.
+   if(tune<1200)  //rate mode. I m not a fan of this mode but a friend of mine wanted it so :P
    {
      pError = 10*pitchsetp - G[0];
      dPError = 0;//no derivative. I have found that taking the derivative adds a lot of noise and makes controlling the quad very difficult in rate mode)
