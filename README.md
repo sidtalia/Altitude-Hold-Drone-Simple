@@ -19,7 +19,7 @@ ARMING-DISARMING SEQUENCE:
 
 2)ARMING : push the left stick (yaw and throttle) to the right (yaw channel pulse more than 1750us)
 
-3)DISARMING : push the left stick to the right (yaw channel pulse less than 1250us)
+3)DISARMING : push the left stick to the left (yaw channel pulse less than 1250us)
 
 
 If you change any of the following you might have to find your own PID settings
