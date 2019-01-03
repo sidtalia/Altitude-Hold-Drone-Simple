@@ -1,4 +1,7 @@
 # Altitude-Hold-Drone-Simple
+
+video link : https://studio.youtube.com/video/D5vC0Eu9LyE/edit 
+
 Has 3 modes : 
 
 1)Rate mode : when aux channel is at the lowest position(pwm less than 1200us).
