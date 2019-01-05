@@ -1,6 +1,6 @@
 # Altitude-Hold-Drone-Simple
 
-video link : https://studio.youtube.com/video/D5vC0Eu9LyE/edit 
+video link : https://www.youtube.com/watch?v=D5vC0Eu9LyE 
 
 Has 3 modes : 
 
