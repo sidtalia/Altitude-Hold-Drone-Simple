@@ -1,3 +1,4 @@
+
  /*
  * recent changes - 
  * gyro scale changed from 500deg/s to 1000deg/s
@@ -5,13 +6,12 @@
      leading to extreme steady state stability (it is essentially running an ID algorithm as long as your errors aren't larger than 3-4
      degrees) while also allowing extreme maneuverability(smaller rise time). 
  */
-
 #include "I2Cdev.h"
 #include "MPU6050.h"
 #include "Wire.h"
 
-#define BaseKp 4.0
-#define BaseKd 2.0
+#define BaseKp 5.0
+#define BaseKd 1.6
 int tune; // tune is for toggling alti-hold
 float Kp_pitch,Kp_roll;
 #define Ki 0.0375  //premultiply the time with Ki 
@@ -20,7 +20,7 @@ float Kp_pitch,Kp_roll;
 #define minValue 1100  //min throttle value, this is to prevent any motor from stopping mid air.
 #define maxValue 2000 //max pwm for any motor 
 #define YAW_MAX 300   //max value of yaw input
-#define CONSTANT 0.00045 //reduce this number if you want to reduce the high end punch(large error punch, low frequency punches)  
+#define CONSTANT 0.0009 
 #define DCONSTANT 0.0000001//reduce this number if you want to reduce the "responsiveness" (small error, high frequency punches)
 /*
 NOTE : increasing the value of CONSTANT and DCONSTANT will increase responsiveness and "bite" but will also significantly reduce the 
@@ -92,14 +92,30 @@ void setup()
     accelgyro.initialize();  //do the whole initial setup thingy using this function.
     accelgyro.testConnection()==1 ? connection=1 : connection=0 ; 
     // offsets
+    //916||98.5||15958||8.0||21.5||69.9
 
-    offsetA[0]= 618;        //these offsets were calculated beforehand
-    offsetA[1]= -369; 
-    offsetA[2]= -27.27;
-    offsetG[0]= 2.3;
-    offsetG[1]= -20;
-    offsetG[2]= -75;
+    offsetA[0]= 916;        //these offsets were calculated beforehand
+    offsetA[1]= 98.5; 
+    offsetA[2]= -115;
+    offsetG[0]= -8;
+    offsetG[1]= -21.5;
+    offsetG[2]= -69.9;
     
+//    offsetG[0] = 0; //reset offsets.
+//    offsetG[1] = 0;
+//    offsetG[2] = 0;
+//    for(int j=0;j<3600;j++) //3600*0.000280 ~1s. spend 1 s on finding gyro offsets.
+//    {
+//      accelgyro.getMotion6( &a[0], &a[1], &a[2], &g[0], &g[1], &g[2]);
+//      for(i=0;i<3;i++)
+//      {
+//        offsetG[i]+=g[i];
+//      }
+//    }
+//    for(i=0;i<3;i++)
+//    {
+//      offsetG[i]/=3600;//average out.
+//    }    
     for(j=0;j<2000;j++)   //taking 2000 samples for finding initial orientation,takes about 0.8 seconds  
     {
       accelgyro.getMotion6(&a[0], &a[1], &a[2], &g[0], &g[1], &g[2]);
@@ -131,13 +147,13 @@ int p,r,y;    // initializing PID outputs for pitch, yaw, roll
 long lastTime;  //timing variable for failsafe 
 float tanSqTheta,cosSqTheta,cosTheta,Av=0,lastAv=0,Vv=0,terror;
 float sterror=0;
-float dist,lastDist=0.2,lastV,delV=0;
+float dist,lastDist=0.2,lastV=0,delV=0,Vvacc=0,KG=0.99,bias=0,dVv=0;
 
 volatile bool ultra=false;
 #define HOVERTHROTTLE 1500
 #define throttleKp 120
-#define throttleKi 0.1
-#define throttleKd 0.1
+#define throttleKi 0.5
+#define throttleKd 0.5
 #define dt 0.0025  //cycle time in seconds
 //#define my_sqrt(a) (0.25 + a*(1-(0.25*a))) // 30us, DO NOT USE IT FOR numbers too far away from 1, its an approximation for g's sake.
 
@@ -146,6 +162,16 @@ volatile bool servoWrite=0; //initializing servoWrite variable as false(no signa
 bool arm=0;  //initializing arming variable as false(initially not armed)
 bool state=0; //initializing state as false so that the motor is not sent any signals
 bool lowbatt = false;
+
+float mod(float a)
+{
+  if(a>=0)
+  {
+    return a;
+  }
+  return -a;
+}
+
 
 void readMPU()   //function for reading MPU values. its about 80us faster than getMotion6() and hey every us counts!
 {
@@ -170,26 +196,24 @@ void readMPU()   //function for reading MPU values. its about 80us faster than g
     A[2] = 19;
   }
   Av = A[2]*cosTheta - 9.8*cosSqTheta; // 20us
-  
   Av = 0.95*lastAv + 0.05*Av;//Low pass filter. The readings have a lot of high frequency jitter.
   lastAv = Av;
+  
   if(ultra)
   {
     ultra = false;
     dist = input[5]*0.0002105*cosTheta;//caliberation number to convert to meters.
-    Vv = (dist - lastDist)*10;//10Hz. 
-    delV = Vv - lastV;
-   /*
-    if the change in speed within one ultrasonic height update(10Hz->0.1s / update) is more than the vertical acceleration 
-    of the quadcopter, it's probably because some object suddenly came underneath the quad, ignore it). 
-   */
-    if((delV*delV*100)>(Av*Av))//30us
-    {
-      Vv = lastV;
-    }
+    Vv = (dist - lastDist)*10;
+    dVv = Vv - lastV;
     lastDist = dist; 
     lastV = Vv;
-  }//188us,31 to spare!
+    delV = Vv - Vvacc;//difference between accelerometer estimate and the measured velocity.
+    if( (mod(dVv)*10) > mod(Av) )//takes care of sudden changes in distance to ground.
+    {
+      Vv = lastV;
+    }//183us
+    Vvacc = KG*Vv + (1-KG)*Vvacc; 
+  }//212us. 4us overshoot
   
   esc_timer=micros();   //get time stamp
   PORTD |= PULL_HIGH;   //pull the pins high 
@@ -370,52 +394,38 @@ void loop()
    //50us. 548us
    if(lowbatt||((millis()-failsafe>1000)&&arm))//(if connection has been lost but we are mid air)
    {
-      tune=2000;//forcefully go into alti-hold mode,
-      dummy = 1450;//drop with 10% full speed, should be about 50cm/s
-      if(!lowbatt)//if we've lost connection to the radio, go into failsafe.
-      {
-        rollsetp = 0;
-        pitchsetp = 0;
-        yawsetp = 0; // ensure that it stays relatively flat 
-      }
+//       tune=2000;//forcefully go into alti-hold mode,
+//       dummy = 1450;//drop with 10% full speed, should be about 50cm/s
+//       if(!lowbatt)//if we've lost connection to the radio, go into failsafe.
+//       {
+//         rollsetp = 0;
+//         pitchsetp = 0;
+//         yawsetp = 0; // ensure that it stays relatively flat 
+//       }
    }
    //PID begins---
-   if(tune>1400)//angle and altitude mode
+   if(tune>900)//angle and altitude mode
    {
-     if(tune>1800)//altitude mode
-     {
-      terror = 0.01*(deadBand(dummy)-1500) - Vv; //throttle error. 
-      sterror += terror; //integral of throttle error
-      throttle = hovercap(throttleKp*terror) + hovercap(throttleKi*sterror) - hovercap(throttleKd*Av) + HOVERTHROTTLE;//open loop + closed loop = advanced PID.
+//      if(tune>1800)//altitude mode
+//      {
+//       Vertical_Velocity();
+//       terror = 0.01*(deadBand(dummy)-1500) - Vv; //throttle error. 
+//       sterror += terror; //integral of throttle error
+//       throttle = hovercap(throttleKp*terror) + hovercap(throttleKi*sterror) - hovercap(throttleKd*Av) + HOVERTHROTTLE;//open loop + closed loop = advanced PID.
 
-      if(input[1]<minValue)//if the throttle value was less than a particular value, it means the user isn't applying any throttle so just keep throttle at the min value.
-      {
-        throttle = minValue;
-      }
-     } 
+//       if(input[1]<minValue)//if the throttle value was less than a particular value, it means the user isn't applying any throttle so just keep throttle at the min value.
+//       {
+//         throttle = minValue;
+//       }
+//      }
      pError = pitchsetp-T[0]; //storing the error value somewhere as it will be used over and over
-     //a new input only comes in every 20 ms(by default). therefore the rate of change of input = change in input/0.02 = change in input*50
      dPError = ExpKd((pitchsetp - lastPitchSetp)*50) - G[0];//derivative of the input minus derivative of state
-     sigma[0]+= (pError);//incrementing integral of error 
+     sigma[0]+= (pError); //incrementing integral of error 
      
      rError = rollsetp-T[1]; 
      dRError = ExpKd((rollsetp - lastRollSetp)*50) - G[1];
-     sigma[1]+= (rError);//incrementing integral of error 
+     sigma[1]+= (rError);
    }//142us . 690us since esc_timer
-   
-   if(tune<1200)  //rate mode. I m not a fan of this mode but a friend of mine wanted it so :P
-   {
-     pError = 10*pitchsetp - G[0];
-     dPError = 0;//no derivative. I have found that taking the derivative adds a lot of noise and makes controlling the quad very difficult in rate mode)
-     lastPError = pError;
-
-     rError = 10*rollsetp - G[1];
-     dRError = 0;//no derivative. I have found that taking the derivative adds a lot of noise and makes controlling the quad very difficult in rate mode)
-     lastRError = rError;
-
-     sigma[0] = 0.0;//no integral needed. The exponential controller is pretty good at regulation and tracking both.
-     sigma[1] = 0.0;
-   }//takes less time compared to the other if condition
    
    //limiting the integral value
    for(i=0;i<2;i++)
@@ -567,5 +577,4 @@ ISR(PCINT1_vect,ISR_NOBLOCK)
     ultra = true;
   }
 }
-
 
