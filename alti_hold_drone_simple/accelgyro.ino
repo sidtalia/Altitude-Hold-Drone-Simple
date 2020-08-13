@@ -22,7 +22,7 @@
 
 inline __attribute__((always_inline)) float my_asin(float a)
 {
-  return a*(1+(0.5*a*a)); //35us
+  return a*(0.94+(0.54*a*a)); //35us
 }
 
 inline void callimu()
